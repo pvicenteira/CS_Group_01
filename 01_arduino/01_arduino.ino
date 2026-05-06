@@ -15,13 +15,13 @@ LiquidCrystal lcd(13, 12, 11, 10, 9, 8);
 DHT dht(DHTPIN, DHTTYPE);
 Adafruit_TSL2561_Unified tsl = Adafruit_TSL2561_Unified(TSL2561_ADDR_FLOAT, 12345);
 
-// --- Time variables ---
+// --- VARIABLES DE TIEMPO ---
 unsigned long tiempoAnteriorData = 0;
 unsigned long tiempoAnteriorScroll = 0;
-const long intervaloData = 8000;  
-const int intervaloScroll = 350;   
+const long intervaloData = 8000;    // 8 segundos para analizar y enviar
+const int intervaloScroll = 350;    // Velocidad del texto en LCD
 
-// --- Initialitation of variables ---
+// --- VARIABLES DE ESTADO (Globales para que el LCD las use) ---
 int puntosTotales = 0;
 int pT = 0, pH = 0, pL = 0, pR = 0;
 String resultSimple = "Wait...";
@@ -50,10 +50,11 @@ void setup() {
 void loop() {
   unsigned long tiempoActual = millis();
 
+  // --- BLOQUE 1: ANALIZAR CADA 8 SEGUNDOS ---
   if (tiempoActual - tiempoAnteriorData >= intervaloData || tiempoAnteriorData == 0) {
     tiempoAnteriorData = tiempoActual;
 
-    // Reading the sensors
+    // 1.1 Lectura real de sensores
     float t = dht.readTemperature();       
     float h = dht.readHumidity();          
     sensors_event_t event;
@@ -62,51 +63,52 @@ void loop() {
     int lecturaRuido = analogRead(pinRuido);
     float db = 20 * log10(lecturaRuido + 1) + 20;
 
+    // 1.2 Reinicio de lógica de evaluación
     pT = 0; pH = 0; pL = 0; pR = 0;
     alertT = "Common"; alertH = "Common"; alertL = "Common"; alertR = "Common";
     String nuevaLista = ""; 
 
-    // Temperature distribution
+    // Evaluación Temperatura
     if (t >= 20 && t <= 24) pT = 25;
     else if ((t >= 18 && t < 20) || (t > 24 && t <= 26)) pT = 12;
     if (t < 18) { alertT = "Low_Temp"; nuevaLista += "Low Temp! "; }
     else if (t > 26) { alertT = "High_Temp"; nuevaLista += "High Temp! "; }
 
-    // Humidity distribution
+    // Evaluación Humedad
     if (h >= 40 && h <= 60) pH = 25;
     else if ((h >= 30 && h < 40) || (h > 60 && h <= 70)) pH = 12;
     if (h < 30) { alertH = "Low_Hum"; nuevaLista += "Low Hum! "; }
     else if (h > 70) { alertH = "High_Hum"; nuevaLista += "High Hum! "; }
 
-    // Light distribution
+    // Evaluación Luz
     if (lux >= 500 && lux <= 750) pL = 25;
     else if ((lux >= 300 && lux < 500) || (lux > 750 && lux <= 1000)) pL = 12;
     if (lux < 300) { alertL = "Low_Light"; nuevaLista += "Low Light! "; }
     else if (lux > 1000) { alertL = "High_Light"; nuevaLista += "High Light! "; }
 
-    // Noise distribution
+    // Evaluación Ruido
     if (db <= 40) pR = 25;
     else if (db > 40 && db <= 50) pR = 12;
     if (db > 50) { alertR = "High_Noise"; nuevaLista += "High Noise! "; }
 
     puntosTotales = pT + pH + pL + pR;
-
     
+    // Resultado textual
     if (puntosTotales >= 75)      resultSimple = "Great"; 
     else if (puntosTotales >= 50) resultSimple = "Okay "; 
     else                          resultSimple = "Bad   ";
 
-
+    // Preparar lista de alertas para el scroll
     if (nuevaLista == "") nuevaLista = "Ideal Environment";
-    listaAlertas = nuevaLista + "                "; 
-    posicionScroll = 0; 
+    listaAlertas = nuevaLista + "                "; // Espacios para el efecto de scroll
+    posicionScroll = 0; // Reiniciar scroll al haber nuevos datos
 
-    // LEDs control
+    // 1.3 Control de LEDs
     digitalWrite(ledVerde, puntosTotales >= 75);
     digitalWrite(ledAmarillo, (puntosTotales >= 50 && puntosTotales < 75));
     digitalWrite(ledRojo, puntosTotales < 50);
 
-    // Send to Python
+    // 1.4 Envío a Python
     Serial.print("DATA>");
     Serial.print(t); Serial.print(","); Serial.print(h); Serial.print(",");
     Serial.print(lux); Serial.print(","); Serial.print(db); Serial.print(",");
@@ -117,20 +119,22 @@ void loop() {
     Serial.print(alertL); Serial.print(","); Serial.println(alertR);
   }
 
-  // LCD ACTUALIZATION ---
+  // --- BLOQUE 2: ACTUALIZACIÓN VISUAL (Scroll continuo) ---
   if (tiempoActual - tiempoAnteriorScroll >= intervaloScroll) {
     tiempoAnteriorScroll = tiempoActual;
     
+    // Fila 0: Estática (solo se actualiza visualmente lo que ya calculamos arriba)
     lcd.setCursor(0, 0);
     lcd.print("Pts:"); 
     lcd.print(puntosTotales);
-
+    // Limpieza de caracteres fantasma si el número baja de 100 a 99
     if(puntosTotales < 10) lcd.print("  "); else if(puntosTotales < 100) lcd.print(" ");
 
     lcd.setCursor(8, 0);
     lcd.print("Res:"); 
     lcd.print(resultSimple);
 
+    // Fila 1: Scroll de alertas
     lcd.setCursor(0, 1);
     lcd.print(listaAlertas.substring(posicionScroll, posicionScroll + 16));
 
@@ -139,5 +143,4 @@ void loop() {
       posicionScroll = 0; 
     }
   }
-
 }
