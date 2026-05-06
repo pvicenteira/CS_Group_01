@@ -117,4 +117,27 @@ void loop() {
     Serial.print(alertL); Serial.print(","); Serial.println(alertR);
   }
 
+  // LCD ACTUALIZATION ---
+  if (tiempoActual - tiempoAnteriorScroll >= intervaloScroll) {
+    tiempoAnteriorScroll = tiempoActual;
+    
+    lcd.setCursor(0, 0);
+    lcd.print("Pts:"); 
+    lcd.print(puntosTotales);
+
+    if(puntosTotales < 10) lcd.print("  "); else if(puntosTotales < 100) lcd.print(" ");
+
+    lcd.setCursor(8, 0);
+    lcd.print("Res:"); 
+    lcd.print(resultSimple);
+
+    lcd.setCursor(0, 1);
+    lcd.print(listaAlertas.substring(posicionScroll, posicionScroll + 16));
+
+    posicionScroll++;
+    if (posicionScroll > (listaAlertas.length() - 16)) {
+      posicionScroll = 0; 
+    }
+  }
+
 }
