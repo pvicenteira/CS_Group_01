@@ -54,6 +54,68 @@ estado = {
     'lock': threading.Lock()
 }
 
+# --- FUNCIONES AUXILIARES DE INTERFAZ ---
+
+def crear_grafica_con_ayuda(id_grafica, figura, titulo, texto, ancho=False):
+    """Encapsula una gráfica en una tarjeta con botón de explicación."""
+    estilo_card = {
+        'backgroundColor': COLORS['card'],
+        'border': f'1px solid {COLORS["border"]}',
+        'borderRadius': '15px',
+        'overflow': 'hidden'
+    }
+    # Manejo de seguridad si dbc no cargó
+    if dbc is None:
+        return html.Div("Error: dash_bootstrap_components no disponible")
+
+    return html.Div(
+        style={'gridColumn': 'span 2' if ancho else 'span 1'},
+        children=[
+            dbc.Card(style=estilo_card, children=[
+                dbc.CardHeader(
+                    style={
+                        'display': 'flex',
+                        'justifyContent': 'space-between',
+                        'alignItems': 'center',
+                        'padding': '10px 20px'
+                    },
+                    children=[
+                        html.Span(titulo, style={
+                            'fontWeight': 'bold',
+                            'color': COLORS['accent'],
+                            'fontSize': '14px'
+                        }),
+                        dbc.Button(
+                            "❓ EXPLANATION",
+                            id={'type': 'btn-ayuda', 'index': id_grafica},
+                            size="sm", color="link",
+                            style={
+                                'color': COLORS['subtext'],
+                                'textDecoration': 'none',
+                                'fontSize': '12px'
+                            }
+                        )
+                    ]),
+                dbc.Collapse(
+                    dbc.CardBody(
+                        html.P(texto, style={
+                            'fontSize': '13px', 'margin': '0',
+                            'color': COLORS['subtext'], 'lineHeight': '1.4'
+                        }),
+                        style={
+                            'backgroundColor': '#24273a',
+                            'borderBottom': f'1px solid {COLORS["border"]}'
+                        }
+                    ),
+                    id={'type': 'collapse-ayuda', 'index': id_grafica},
+                    is_open=False,
+                ),
+                dcc.Graph(figure=figura, id=id_grafica,
+                          config={'displayModeBar': False})
+            ])
+        ]
+    )
+
 def procesar_linea_serial(linea, nombre_archivo):
     """Procesa una línea de datos y la guarda en el archivo Excel."""
     valores = linea.replace("DATA>", "").split(',')
@@ -139,16 +201,45 @@ app.layout = html.Div(
                 'borderTop': f'1px solid {COLORS["border"]}'
             }),
         ], id="modal-archivo", is_open=False, centered=True) if dbc else html.Div(),
+
         html.H1("SMART STUDY MONITOR", style={
             'textAlign': 'center', 'color': COLORS['accent'],
             'fontWeight': 'bold', 'fontSize': '40px', 'marginBottom': '30px'
         }),
+
+        dcc.Store(id='store-mensaje-guardado', data=None),
+        dbc.Alert(id="alerta-guardado", is_open=False, duration=4000,
+                  color="success", style={
+                      "position": "fixed", "top": 10, "right": 10,
+                      "zIndex": "9999"
+                  }) if dbc else html.Div(),
+
         dcc.Tabs(id="tabs-sistema", value='tab-inicio', children=[
             dcc.Tab(label='🔍 ANALIZE RECORDS', value='tab-inicio', style={
                 'backgroundColor': COLORS['card'], 'color': COLORS['text']
-                }, selected_style={
+            }, selected_style={
                 'backgroundColor': COLORS['accent'], 'color': COLORS['bg']
-                }),
+            }, children=[
+                html.Div(style={'padding': '30px', 'textAlign': 'center'},
+                         children=[
+                    html.Label("Select file:", style={'fontSize': '18px'}),
+                    dcc.Dropdown(
+                        id='selector-archivos',
+                        options=[{'label': f_name, 'value': f_name} for f_name in os.listdir('.')
+                                 if f_name.endswith('.xlsx') and not f_name.startswith('~$')],
+                        style={'width': '50%', 'margin': '20px auto',
+                               'color': '#000'}
+                    ),
+                    html.Button("VIEW DATA", id='btn-analizar', n_clicks=0,
+                                style={
+                        'backgroundColor': COLORS['green'], 'color': COLORS['bg'],
+                        'border': 'none', 'padding': '15px 40px',
+                        'borderRadius': '10px', 'fontWeight': 'bold'
+                    }),
+                    html.Div(id='contenedor-dashboard',
+                             style={'marginTop': '30px'})
+                ])
+            ]),
             dcc.Tab(label='➕ NEW COMPILATION', value='tab-captura', style={
                 'backgroundColor': COLORS['card'], 'color': COLORS['text']
             }, selected_style={
@@ -182,8 +273,11 @@ app.layout = html.Div(
                                  disabled=True)
                 ])
             ]),
-    ])
-])
+        ])
+    ]
+)
+
+# --- CALLBACKS ---
 
 @app.callback(
     Output({'type': 'collapse-ayuda', 'index': ALL}, "is_open"),
@@ -267,6 +361,147 @@ def update_ticker(_):
                 f"💡 Light: {ult_d['Light']} lx | 🔊 Noise: {ult_d['Noise']:.1f} dB"
             )
     return "⏳ WAITING FOR DATA..."
+
+def generar_figuras_analisis(data_f):
+    """Genera las cinco figuras de Plotly para el dashboard."""
+    # Calidad
+    fig_calidad = go.Figure()
+    for punto, color in [(0, COLORS['red']), (12, COLORS['orange']), (25, COLORS['green'])]:
+        cols = ['Pts_Temp', 'Pts_Hum', 'Pts_Light', 'Pts_Noise']
+        counts = [data_f[col].value_counts().get(punto, 0) for col in cols]
+        fig_calidad.add_trace(go.Bar(name=f'{punto} pts',
+                                     x=['Temp', 'Hum', 'Light', 'Noise'],
+                                     y=counts, marker_color=color))
+    fig_calidad.update_layout(template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)',
+                              barmode='group')
+
+    # Alertas
+    al_data = data_f[['Alert_T', 'Alert_H', 'Alert_L', 'Alert_N']].melt()
+    conteo = al_data[al_data['value'] != 'Comun']['value'].value_counts()
+
+    if not conteo.empty:
+        # Definimos una secuencia que use tus colores de acento
+        secuencia_alertas = [COLORS['red'], COLORS['orange'], COLORS['accent'],
+                             COLORS['yellow'], COLORS['blue'], COLORS['cyan_unique'],
+                             COLORS['subtext'], COLORS['border']]
+
+        fig_alertas = px.pie(
+            names=conteo.index,
+            values=conteo.values,
+            color_discrete_sequence=secuencia_alertas
+        )
+        fig_alertas.update_traces(textinfo='percent+label', hole=.3) # Estilo Donut opcional
+    else:
+        fig_alertas = go.Figure().add_annotation(
+            text="OPTIMUM ENVIRONMENT",
+            showarrow=False,
+            font={'color': COLORS['green'], 'size': 16}
+        )
+    fig_alertas.update_layout(template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)')
+
+    # T & H
+    fig_th = make_subplots(specs=[[{"secondary_y": True}]])
+    fig_th.add_trace(go.Scatter(x=data_f.index, y=data_f['Temperature'],
+                                name="Temp", line={'color': COLORS['red']}),
+                     secondary_y=False)
+    fig_th.add_trace(go.Scatter(x=data_f.index, y=data_f['Humidity'],
+                                name="Hum", line={'color': COLORS['blue']}),
+                     secondary_y=True)
+    fig_th.update_layout(template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)')
+
+    # Luz
+    fig_luz = px.line(data_f, y='Light', template="plotly_dark")
+    fig_luz.update_traces(line={'color': COLORS['yellow']})
+    fig_luz.update_layout(paper_bgcolor='rgba(0,0,0,0)')
+
+    # Ruido
+    fig_ruido = go.Figure()
+    noise_data = data_f['Noise'].dropna()
+    if len(noise_data) > 1 and noise_data.std() > 0:
+        kde = gaussian_kde(noise_data)
+        x_range = np.linspace(noise_data.min() - 5, noise_data.max() + 5, 100)
+        fig_ruido.add_trace(go.Scatter(x=x_range, y=kde(x_range),
+                                       fill='tozeroy', line={'color': COLORS['blue']}))
+    fig_ruido.update_layout(template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)')
+
+    return fig_calidad, fig_alertas, fig_th, fig_luz, fig_ruido
+
+@app.callback(
+    Output('contenedor-dashboard', 'children'),
+    [Input('btn-analizar', 'n_clicks')],
+    [State('selector-archivos', 'value')]
+)
+def render_dashboard(n_clicks, archivo):
+    """Renderiza el tablero de análisis completo."""
+    if n_clicks == 0 or not archivo:
+        return ""
+    try:
+        data_f = pd.read_excel(archivo)
+        if data_f.empty:
+            return html.Div(f"⚠️ El archivo '{archivo}' está vacío.",
+                            style={'color': COLORS['orange'], 'textAlign': 'center'})
+
+        f_cal, f_al, f_th, f_luz, f_rui = generar_figuras_analisis(data_f)
+
+        kpis = [
+            ("RECORDS", f"{len(data_f)}", COLORS['cyan_unique']),
+            ("SCORE", f"{data_f['Total_Points'].mean():.1f}", COLORS['accent']),
+            ("TEMP", f"{data_f['Temperature'].mean():.1f}°C", COLORS['red']),
+            ("HUM", f"{data_f['Humidity'].mean():.1f}%", COLORS['blue']),
+            ("LIGHT", f"{data_f['Light'].mean():.0f} lx", COLORS['yellow']),
+            ("NOISE", f"{data_f['Noise'].mean():.1f}dB", COLORS['green'])
+        ]
+
+        return html.Div([
+            html.Div(style={'display': 'flex', 'gap': '10px', 'marginBottom': '20px'},
+                     children=[
+                html.Div(style={
+                    'flex': '1', 'backgroundColor': COLORS['card'], 'padding': '15px',
+                    'borderRadius': '12px', 'borderBottom': f'4px solid {c_kpi}',
+                    'textAlign': 'center'
+                }, children=[
+                    html.Small(t_kpi, style={'color': COLORS['subtext'],
+                                             'fontWeight': 'bold'}),
+                    html.H3(v_kpi, style={'margin': '0'})
+                ]) for t_kpi, v_kpi, c_kpi in kpis
+            ]),
+            dbc.Card(style={
+                'backgroundColor': COLORS['card'], 'padding': '20px',
+                'border': f'1px solid {COLORS["border"]}', 'borderRadius': '15px',
+                'marginBottom': '20px'
+            }, children=[
+                html.H5("DETAILED DATA LOG", style={'color': COLORS['accent']}),
+                dash_table.DataTable(
+                    columns=[{'name': i, 'id': j} for i, j in [
+                        ('Time', 'Time'), ('Temp', 'Temperature'),
+                        ('Hum', 'Humidity'), ('Light', 'Light'),
+                        ('Noise', 'Noise'), ('State', 'Global_State'),
+                        ('Points', 'Total_Points')]],
+                    data=data_f.to_dict('records'), page_action='none',
+                    style_table={'height': '300px', 'overflowY': 'auto'},
+                    style_header={'backgroundColor': '#24273a',
+                                  'color': COLORS['accent'], 'fontWeight': 'bold'},
+                    style_cell={'backgroundColor': COLORS['card'],
+                                'color': COLORS['text'], 'textAlign': 'center'}
+                )
+            ]) if dbc else html.Div(),
+            html.Div(style={'display': 'grid', 'gridTemplateColumns': '1fr 1fr',
+                            'gap': '20px'}, children=[
+                crear_grafica_con_ayuda("g1", f_cal, "QUALITY",
+                                        "How many points each variable has received."),
+                crear_grafica_con_ayuda("g2", f_al, "ALERTS",
+                                        "It shows the percentage of the alerts for each room."),
+                crear_grafica_con_ayuda("g3", f_th, "TEMP & HUM",
+                                        "The relation between temperature and humidity."),
+                crear_grafica_con_ayuda("g4", f_luz, "LIGHT",
+                                        "The evolution of the light over the time."),
+                crear_grafica_con_ayuda("g5", f_rui, "NOISE",
+                                        "Density of the noise in the room.", True),
+            ])
+        ])
+
+    except (pd.errors.EmptyDataError, KeyError, ValueError) as error_dash:
+        return html.Div(f"❌ Error: {error_dash}", style={'color': COLORS['red']})
 
 if __name__ == '__main__':
     app.run(debug=False, port=8050)
